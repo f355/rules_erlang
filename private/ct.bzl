@@ -2,7 +2,11 @@ load(
     "@bazel_skylib//rules:common_settings.bzl",
     "BuildSettingInfo",
 )
-load("//:erlang_app_info.bzl", "ErlangAppInfo")
+load(
+    "//:erlang_app_info.bzl",
+    "ErlangAppInfo",
+    "flat_deps",
+)
 load(":util.bzl", "erl_libs_contents")
 load(
     ":eunit.bzl",
@@ -23,7 +27,7 @@ load(
 def sanitize_sname(s):
     return s.replace("@", "-").replace(".", "_")
 
-def _unique_short_dirnames(files):
+def unique_short_dirnames(files):
     dirs = []
     for f in files:
         dirname = short_dirname(f)
@@ -34,7 +38,7 @@ def _unique_short_dirnames(files):
 def code_paths(dep):
     return [
         path_join(dep.label.workspace_root, d) if dep.label.workspace_root != "" else d
-        for d in _unique_short_dirnames(dep[ErlangAppInfo].beam)
+        for d in unique_short_dirnames(dep[ErlangAppInfo].beam)
     ]
 
 # Calling ctx.expand_location with short_paths=True gives
@@ -57,7 +61,12 @@ def sname(ctx):
 def _impl(ctx):
     erl_libs_dir = ctx.label.name + "_deps"
 
-    erl_libs_files = erl_libs_contents(ctx, dir = erl_libs_dir)
+    erl_libs_files = erl_libs_contents(
+        ctx,
+        deps = flat_deps(ctx.attr.deps),
+        ez_deps = ctx.files.ez_deps,
+        dir = erl_libs_dir,
+    )
 
     package = ctx.label.package
 
@@ -238,7 +247,7 @@ exit /b %CT_RUN_ERRORLEVEL%
             pa_args = " ".join(pa_args),
             dir = path_join(package, "test"),
             log_dir = log_dir,
-            drive_letter = ctx.attr._windows_logdir_drive_letter,
+            drive_letter = ctx.attr._windows_logdir_drive_letter[BuildSettingInfo].value,
             sname = sname(ctx),
             extra_args = " ".join(extra_args),
             test_env = "\n".join(test_env_commands),
@@ -252,7 +261,6 @@ exit /b %CT_RUN_ERRORLEVEL%
     runfiles = runfiles.merge_all(
         [
             ctx.runfiles(ctx.files.compiled_suites + ctx.files.data + erl_libs_files),
-        ] + [
             shard_suite[DefaultInfo].default_runfiles,
         ] + [
             tool[DefaultInfo].default_runfiles
@@ -288,6 +296,9 @@ ct_test = rule(
         "ct_run_extra_args": attr.string_list(),
         "data": attr.label_list(allow_files = True),
         "deps": attr.label_list(providers = [ErlangAppInfo]),
+        "ez_deps": attr.label_list(
+            allow_files = [".ez"],
+        ),
         "tools": attr.label_list(cfg = "target"),
         "test_env": attr.string_dict(),
         "sharding_method": attr.string(

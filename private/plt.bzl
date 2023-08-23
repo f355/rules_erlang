@@ -1,11 +1,16 @@
 load("//:erlang_app_info.bzl", "ErlangAppInfo", "flat_deps")
 load("//:util.bzl", "path_join")
-load(":util.bzl", "erl_libs_contents2")
+load(":util.bzl", "erl_libs_contents")
 load(
     "//tools:erlang_toolchain.bzl",
     "erlang_dirs",
     "maybe_install_erlang",
 )
+
+_IGNORE_WARNINGS = """if [ $R -eq 2 ]; then
+    exit 0
+fi
+"""
 
 def _impl(ctx):
     logfile = ctx.actions.declare_file(ctx.outputs.plt.basename + ".log")
@@ -13,7 +18,7 @@ def _impl(ctx):
 
     erl_libs_dir = ctx.label.name + "_deps"
 
-    erl_libs_files = erl_libs_contents2(
+    erl_libs_files = erl_libs_contents(
         ctx,
         deps = ctx.attr.libs,
         dir = erl_libs_dir,
@@ -36,10 +41,12 @@ def _impl(ctx):
     else:
         deps.extend(flat_deps(ctx.attr.deps))
 
-    target_files = erl_libs_contents2(
+    target_files = erl_libs_contents(
         ctx,
         deps = deps,
         dir = target_files_dir,
+        expand_ezs = True,
+        ez_deps = ctx.files.ez_deps,
     )
 
     target_files_path = ""
@@ -78,6 +85,8 @@ def _impl(ctx):
     args.add("--output_plt")
     args.add(ctx.outputs.plt)
 
+    args.add_all(ctx.attr.dialyzer_opts)
+
     (erlang_home, _, runfiles) = erlang_dirs(ctx)
 
     script = """#!/bin/bash
@@ -99,8 +108,10 @@ R=$?
 set +x
 set -e
 if [ ! $R -eq 0 ]; then
-    head {logfile}
+    echo "DIALYZER: There were warnings and/or errors"
 fi
+echo "DIALYZER: Output written to {logfile}"
+{ignore_warnings_clause}
 exit $R
 """.format(
         maybe_install_erlang = maybe_install_erlang(ctx),
@@ -108,6 +119,7 @@ exit $R
         home = home_dir.path,
         erl_libs_path = erl_libs_path,
         logfile = logfile.path,
+        ignore_warnings_clause = _IGNORE_WARNINGS if ctx.attr.ignore_warnings else "",
     )
 
     inputs = depset(
@@ -137,8 +149,15 @@ plt = rule(
         "deps": attr.label_list(
             providers = [ErlangAppInfo],
         ),
+        "ez_deps": attr.label_list(
+            allow_files = [".ez"],
+        ),
         "for_target": attr.label(
             providers = [ErlangAppInfo],
+        ),
+        "dialyzer_opts": attr.string_list(),
+        "ignore_warnings": attr.bool(
+            default = True,
         ),
     },
     outputs = {

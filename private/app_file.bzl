@@ -1,3 +1,4 @@
+load("@bazel_skylib//lib:shell.bzl", "shell")
 load("//:erlang_app_info.bzl", "ErlangAppInfo")
 load(
     "//tools:erlang_toolchain.bzl",
@@ -5,55 +6,98 @@ load(
     "maybe_install_erlang",
 )
 
-def _module_name(f):
-    return "'{}'".format(f.basename.replace(".beam", "", 1))
-
 def _impl(ctx):
-    app_file = ctx.actions.declare_file(ctx.attr.out.name)
-
     if len(ctx.files.app_src) > 1:
         fail("Multiple .app.src files ({}) are not supported".format(
             ctx.files.app_src,
         ))
-    elif len(ctx.files.app_src) == 1:
-        src = ctx.files.app_src[0].path
+
+    app_file = ctx.actions.declare_file(ctx.attr.out.name)
+
+    (erlang_home, _, runfiles) = erlang_dirs(ctx)
+
+    modules = shell.array_literal([
+        f.path
+        for f in ctx.files.modules
+    ])
+
+    app_file_tool_path = ctx.attr.app_file_tool[DefaultInfo].files_to_run.executable.path
+
+    if len(ctx.files.app_src) == 1:
+        script = """set -euo pipefail
+
+{maybe_install_erlang}
+
+mods=()
+module_paths={modules}
+set +u
+for f in ${{module_paths[@]}}; do
+    if [[ -d "$f" ]]; then
+        for m in "$f"/*.beam; do
+            mods+=( $(basename "$m" .beam) )
+        done
+    else
+        mods+=( $(basename "$f" .beam) )
+    fi
+done
+
+if [[ ${{#mods[@]}} -eq 0 ]]; then
+    mods_term="[]"
+else
+    mods_term="['${{mods[0]}}'"
+    for m in ${{mods[@]:1}}; do
+        mods_term="$mods_term,'$m'"
+    done
+    mods_term="$mods_term]"
+fi
+set -u
+
+cat << EOF | "{erlang_home}"/bin/escript {app_file_tool} modules {src} > {out}
+$mods_term.
+EOF
+
+""".format(
+            maybe_install_erlang = maybe_install_erlang(ctx),
+            erlang_home = erlang_home,
+            app_file_tool = app_file_tool_path,
+            modules = modules,
+            src = ctx.files.app_src[0].path,
+            out = app_file.path,
+        )
+
+        runfiles = runfiles.merge(
+            ctx.attr.app_file_tool[DefaultInfo].default_runfiles,
+        )
+
+        inputs = depset(
+            direct = ctx.files.app_src + ctx.files.modules,
+            transitive = [runfiles.files],
+        )
     else:
-        src = ""
+        app_module = ctx.attr.app_module if ctx.attr.app_module != "" else ctx.attr.app_name + "_app"
+        if len([m for m in ctx.files.modules if m.basename == app_module + ".beam"]) > 0:
+            registered_list = "[" + ",".join([ctx.attr.app_name + "_sup"] + ctx.attr.app_registered) + "]"
+        else:
+            app_module = ""
+            if len(ctx.attr.app_registered) > 0:
+                fail(app_module, "is not present, but app_registered was provided.")
+            registered_list = ""
 
-    app_module = ctx.attr.app_module if ctx.attr.app_module != "" else ctx.attr.app_name + "_app"
-    if len([m for m in ctx.files.modules if m.basename == app_module + ".beam"]) != 1:
-        app_module = ""
-
-    modules = "[" + ",".join([_module_name(m) for m in ctx.files.modules]) + "]"
-
-    if len(ctx.attr.app_registered) > 0:
-        registered_list = "[" + ",".join([ctx.attr.app_name + "_sup"] + ctx.attr.app_registered) + "]"
-    else:
-        registered_list = ""
-
-    applications_list = ""
-    if src == "" or len(ctx.attr.extra_apps) > 0 or len(ctx.attr.deps) > 0:
-        applications = ["kernel", "stdlib"] + ctx.attr.extra_apps
+        applications = ["kernel", "stdlib"] + ctx.attr.extra_apps + ctx.attr.optional_applications
         for dep in ctx.attr.deps:
             applications.append(dep[ErlangAppInfo].app_name)
         applications_list = "[" + ",".join(applications) + "]"
 
-    stamp = ctx.attr.stamp == 1 or (ctx.attr.stamp == -1 and
-                                    ctx.attr.private_stamp_detect)
+        optional_applications_list = "[" + ",".join(ctx.attr.optional_applications) + "]"
 
-    (erlang_home, _, runfiles) = erlang_dirs(ctx)
+        stamp = ctx.attr.stamp == 1 or (ctx.attr.stamp == -1 and
+                                        ctx.attr.private_stamp_detect)
 
-    app_file_tool_path = ctx.attr.app_file_tool[DefaultInfo].files_to_run.executable.path
-
-    script = """set -euo pipefail
+        script = """set -euo pipefail
 
 {maybe_install_erlang}
 
-if [ -n "{src}" ]; then
-    cp {src} {out}
-else
-    echo "{{application,'{name}',[{{registered, ['{name}_sup']}},{{env, []}}]}}." > {out}
-fi
+echo "{{application,'{name}',[{{registered, []}},{{env, []}}]}}." > {out}
 
 if [ -n '{description}' ]; then
     cat << 'EOF' | "{erlang_home}"/bin/escript {app_file_tool} description {out} > {out}.tmp && mv {out}.tmp {out}
@@ -84,8 +128,32 @@ if [ -n "$VSN" ]; then
         {out} > {out}.tmp && mv {out}.tmp {out}
 fi
 
-cat << 'EOF' | "{erlang_home}"/bin/escript {app_file_tool} modules {out} > {out}.tmp && mv {out}.tmp {out}
-{modules}.
+mods=()
+module_paths={modules}
+set +u
+for f in ${{module_paths[@]}}; do
+    if [[ -d "$f" ]]; then
+        for m in "$f"/*.beam; do
+            mods+=( $(basename "$m" .beam) )
+        done
+    else
+        mods+=( $(basename "$f" .beam) )
+    fi
+done
+
+if [[ ${{#mods[@]}} -eq 0 ]]; then
+    mods_term="[]"
+else
+    mods_term="['${{mods[0]}}'"
+    for m in ${{mods[@]:1}}; do
+        mods_term="$mods_term,'$m'"
+    done
+    mods_term="$mods_term]"
+fi
+set -u
+
+cat << EOF | "{erlang_home}"/bin/escript {app_file_tool} modules {out} > {out}.tmp && mv {out}.tmp {out}
+$mods_term.
 EOF
 
 if [ -n '{registered}' ]; then
@@ -97,6 +165,12 @@ fi
 if [ -n '{applications}' ]; then
     cat << 'EOF' | "{erlang_home}"/bin/escript {app_file_tool} applications {out} > {out}.tmp && mv {out}.tmp {out}
 {applications}.
+EOF
+fi
+
+if [ -n '{optional_applications}' ]; then
+    cat << 'EOF' | "{erlang_home}"/bin/escript {app_file_tool} optional_applications {out} > {out}.tmp && mv {out}.tmp {out}
+{optional_applications}.
 EOF
 fi
 
@@ -120,32 +194,32 @@ if [ -n '{extra_keys}' ]; then
 EOF
 fi
 """.format(
-        maybe_install_erlang = maybe_install_erlang(ctx),
-        erlang_home = erlang_home,
-        app_file_tool = app_file_tool_path,
-        info_file = ctx.info_file.path,
-        name = ctx.attr.app_name,
-        description = ctx.attr.app_description,
-        stamp_version_key = ctx.attr.stamp_version_key if stamp else "",
-        version = ctx.attr.app_version,
-        modules = modules,
-        registered = registered_list,
-        applications = applications_list,
-        app_module = app_module,
-        env = ctx.attr.app_env,
-        extra_keys = ctx.attr.app_extra_keys,
-        src = src,
-        out = app_file.path,
-    )
+            maybe_install_erlang = maybe_install_erlang(ctx),
+            erlang_home = erlang_home,
+            app_file_tool = app_file_tool_path,
+            info_file = ctx.info_file.path,
+            name = ctx.attr.app_name,
+            description = ctx.attr.app_description,
+            stamp_version_key = ctx.attr.stamp_version_key if stamp else "",
+            version = ctx.attr.app_version,
+            modules = modules,
+            registered = registered_list,
+            applications = applications_list,
+            optional_applications = optional_applications_list,
+            app_module = app_module,
+            env = ctx.attr.app_env,
+            extra_keys = ctx.attr.app_extra_keys,
+            out = app_file.path,
+        )
 
-    runfiles = runfiles.merge(
-        ctx.attr.app_file_tool[DefaultInfo].default_runfiles,
-    )
+        runfiles = runfiles.merge(
+            ctx.attr.app_file_tool[DefaultInfo].default_runfiles,
+        )
 
-    inputs = depset(
-        direct = ctx.files.app_src + ([ctx.info_file] if stamp else []),
-        transitive = [runfiles.files],
-    )
+        inputs = depset(
+            direct = ([ctx.info_file] if stamp else []) + ctx.files.modules,
+            transitive = [runfiles.files],
+        )
 
     ctx.actions.run_shell(
         inputs = inputs,
@@ -177,6 +251,7 @@ app_file = rule(
         "app_env": attr.string(),
         "app_extra_keys": attr.string(),
         "extra_apps": attr.string_list(),
+        "optional_applications": attr.string_list(),
         "app_src": attr.label_list(allow_files = [".app.src"]),
         "modules": attr.label_list(allow_files = [".beam"]),
         "deps": attr.label_list(providers = [ErlangAppInfo]),

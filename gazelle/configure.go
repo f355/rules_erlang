@@ -2,17 +2,21 @@ package erlang
 
 import (
 	"flag"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/bazelbuild/bazel-gazelle/config"
 	"github.com/bazelbuild/bazel-gazelle/rule"
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/rabbitmq/rules_erlang/gazelle/mutable_set"
 	"github.com/rabbitmq/rules_erlang/gazelle/slices"
 )
 
 const (
+	excludeDirective                     = "exclude"
+	erlangResolveDirective               = "erlang_resolve"
 	moduleSourceDirective                = "erlang_module_source_lib"
 	excludeWhenRuleOfKindExistsDirective = "erlang_exclude_when_rule_of_kind_exists"
 	generateBeamFilesMacroDirective      = "erlang_generate_beam_files_macro"
@@ -24,6 +28,7 @@ const (
 	erlangAppDepDirective                = "erlang_app_dep"
 	erlangAppDepIgnoreDirective          = "erlang_app_dep_ignore"
 	erlangAppDepBuildOnlyDirective       = "erlang_app_dep_exclude"
+	erlangAppPathIgnoreDirective         = "erlang_app_path_ignore"
 	erlangAppExtraAppDirective           = "erlang_app_extra_app"
 	erlangNoTestsDirective               = "erlang_no_tests"
 	erlangErlcOptDirective               = "erlang_erlc_opt"
@@ -92,10 +97,13 @@ type ErlangConfig struct {
 	Rel                             string
 	NoTests                         bool
 	AppsDirs                        mutable_set.MutableSet[string]
+	Excludes                        mutable_set.MutableSet[string]
+	Resolves                        map[string]string
 	ModuleMappings                  map[string]string
 	ExcludeWhenRuleOfKindExists     mutable_set.MutableSet[string]
 	IgnoredDeps                     mutable_set.MutableSet[string]
 	ExcludedDeps                    mutable_set.MutableSet[string]
+	IgnoredPaths                    mutable_set.MutableSet[string]
 	GenerateBeamFilesMacro          bool
 	GenerateFewerBytecodeRules      bool
 	GenerateTestBeamUnconditionally bool
@@ -117,10 +125,13 @@ func (erlang *Configurer) defaultErlangConfig(globalConfig *ErlangGlobalConfig) 
 		Rel:                             "",
 		NoTests:                         erlang.noTests,
 		AppsDirs:                        mutable_set.New(erlang.appsDir),
+		Excludes:                        mutable_set.New[string](),
+		Resolves:                        make(map[string]string),
 		ModuleMappings:                  make(map[string]string),
 		ExcludeWhenRuleOfKindExists:     mutable_set.New[string](),
 		IgnoredDeps:                     defaultIgnoredDeps,
 		ExcludedDeps:                    mutable_set.New[string](),
+		IgnoredPaths:                    mutable_set.New[string](),
 		GenerateBeamFilesMacro:          false,
 		GenerateFewerBytecodeRules:      erlang.compact,
 		GenerateTestBeamUnconditionally: false,
@@ -149,10 +160,13 @@ func erlangConfigForRel(c *config.Config, rel string) *ErlangConfig {
 			Rel:                             rel,
 			NoTests:                         parentConfig.NoTests,
 			AppsDirs:                        mutable_set.Copy(parentConfig.AppsDirs),
+			Excludes:                        mutable_set.Copy(parentConfig.Excludes),
+			Resolves:                        CopyMap(parentConfig.Resolves),
 			ModuleMappings:                  CopyMap(parentConfig.ModuleMappings),
 			ExcludeWhenRuleOfKindExists:     mutable_set.Copy(parentConfig.ExcludeWhenRuleOfKindExists),
 			IgnoredDeps:                     mutable_set.Copy(parentConfig.IgnoredDeps),
 			ExcludedDeps:                    mutable_set.Copy(parentConfig.ExcludedDeps),
+			IgnoredPaths:                    mutable_set.Copy(parentConfig.IgnoredPaths),
 			GenerateBeamFilesMacro:          parentConfig.GenerateBeamFilesMacro,
 			GenerateFewerBytecodeRules:      parentConfig.GenerateFewerBytecodeRules,
 			GenerateTestBeamUnconditionally: parentConfig.GenerateTestBeamUnconditionally,
@@ -210,6 +224,8 @@ func (erlang *Configurer) CheckFlags(fs *flag.FlagSet, c *config.Config) error {
 
 func (erlang *Configurer) KnownDirectives() []string {
 	return []string{
+		excludeDirective,
+		erlangResolveDirective,
 		moduleSourceDirective,
 		excludeWhenRuleOfKindExistsDirective,
 		generateBeamFilesMacroDirective,
@@ -221,6 +237,7 @@ func (erlang *Configurer) KnownDirectives() []string {
 		erlangAppDepDirective,
 		erlangAppDepIgnoreDirective,
 		erlangAppDepBuildOnlyDirective,
+		erlangAppPathIgnoreDirective,
 		erlangAppExtraAppDirective,
 		erlangNoTestsDirective,
 		erlangErlcOptDirective,
@@ -235,6 +252,11 @@ func boolValue(d rule.Directive) bool {
 	return v
 }
 
+func checkPathMatchPattern(pattern string) error {
+	_, err := doublestar.Match(pattern, "x")
+	return err
+}
+
 func (erlang *Configurer) Configure(c *config.Config, rel string, f *rule.File) {
 	erlangConfig := erlangConfigForRel(c, rel)
 
@@ -245,8 +267,26 @@ func (erlang *Configurer) Configure(c *config.Config, rel string, f *rule.File) 
 
 		for _, d := range f.Directives {
 			switch d.Key {
+			case excludeDirective:
+				p := path.Join(rel, d.Value)
+				if err := checkPathMatchPattern(p); err != nil {
+					Log(c, "    the exclusion pattern is not valid", p, ":", err)
+					continue
+				}
+				erlangConfig.Excludes.Add(p)
+			case erlangResolveDirective:
+				parts := strings.SplitN(d.Value, " ", 2)
+				if len(parts) != 2 {
+					Log(c, "    the resolve pattern is not valid", d.Value)
+					continue
+				}
+				erlangConfig.Resolves[parts[0]] = parts[1]
 			case moduleSourceDirective:
-				parts := strings.Split(d.Value, ":")
+				parts := strings.SplitN(d.Value, ":", 2)
+				if len(parts) != 2 {
+					Log(c, "    the module mapping pattern is not valid", d.Value)
+					continue
+				}
 				behaviour := parts[0]
 				dep := parts[1]
 				erlangConfig.ModuleMappings[behaviour] = dep
@@ -274,6 +314,13 @@ func (erlang *Configurer) Configure(c *config.Config, rel string, f *rule.File) 
 				erlangConfig.IgnoredDeps.Add(d.Value)
 			case erlangAppDepBuildOnlyDirective:
 				erlangConfig.ExcludedDeps.Add(d.Value)
+			case erlangAppPathIgnoreDirective:
+				p := path.Join(rel, d.Value)
+				if err := checkPathMatchPattern(p); err != nil {
+					Log(c, "    the exclusion pattern is not valid", p, ":", err)
+					continue
+				}
+				erlangConfig.IgnoredPaths.Add(p)
 			case erlangAppExtraAppDirective:
 				erlangConfig.ExtraApps.Add(d.Value)
 			case erlangNoTestsDirective:

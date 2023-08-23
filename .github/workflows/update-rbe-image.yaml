@@ -31,8 +31,9 @@ jobs:
         echo "$(cat WORKSPACE.bazel | npx buildozer 'set commit "${{ steps.find-commit.outputs.SHA }}"' -:rbe)" > WORKSPACE.bazel
         git diff
     - name: CREATE PULL REQUEST
-      uses: peter-evans/create-pull-request@v4.2.4
+      uses: peter-evans/create-pull-request@v5.0.2
       with:
+        token: ${{ secrets.REPO_SCOPED_TOKEN }}
         committer: GitHub <noreply@github.com>
         author: GitHub <noreply@github.com>
         title: Adopt latest rabbitmq-server-buildenv:linux-rbe for RBE

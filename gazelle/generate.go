@@ -12,6 +12,7 @@ import (
 	"github.com/bazelbuild/bazel-gazelle/merger"
 	"github.com/bazelbuild/bazel-gazelle/rule"
 	"github.com/bazelbuild/buildtools/build"
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/rabbitmq/rules_erlang/gazelle/fetch"
 	"github.com/rabbitmq/rules_erlang/gazelle/slices"
 )
@@ -173,27 +174,11 @@ func importRebar(args language.GenerateArgs, erlangApp *ErlangAppBuilder) error 
 	}
 
 	if erlangApp.Srcs.IsEmpty() {
-		err := filepath.WalkDir(rebarAppPath,
-			func(path string, info os.DirEntry, err error) error {
-				if err != nil {
-					return err
-				}
-				if info.IsDir() && slices.Contains(ignoredDirs, filepath.Base(path)) {
-					return filepath.SkipDir
-				}
-				rel, err := filepath.Rel(rebarAppPath, path)
-				if err != nil {
-					return err
-				}
-				erlangApp.AddFile(rel, false)
-				return nil
-			})
+		err := importBareErlang(args, erlangApp)
 		if err != nil {
-			log.Println(err)
-		}
-
-		for _, dep := range rebarConfig.Deps {
-			erlangApp.Deps.Add(dep["name"])
+			for _, dep := range rebarConfig.Deps {
+				erlangApp.Deps.Add(dep["name"])
+			}
 		}
 	}
 	return nil
@@ -208,6 +193,22 @@ func importBareErlang(args language.GenerateArgs, erlangApp *ErlangAppBuilder) e
 			if err != nil {
 				return err
 			}
+
+			rootRel, err := filepath.Rel(args.Config.RepoRoot, path)
+			if err != nil {
+				return err
+			}
+			erlangConfig := erlangConfigForRel(args.Config, rootRel)
+			for _, pattern := range erlangConfig.IgnoredPaths.Values(strings.Compare) {
+				if m, _ := doublestar.PathMatch(pattern, rootRel); m {
+					if info.IsDir() {
+						return filepath.SkipDir
+					} else {
+						return nil
+					}
+				}
+			}
+
 			if info.IsDir() {
 				if slices.Contains(ignoredDirs, filepath.Base(path)) {
 					return filepath.SkipDir
@@ -231,7 +232,6 @@ func importBareErlang(args language.GenerateArgs, erlangApp *ErlangAppBuilder) e
 		log.Println(err)
 	}
 	for _, f := range args.GenFiles {
-		// Log(args.Config, "        ", f)
 		erlangApp.AddFile(f, true)
 	}
 
@@ -273,7 +273,7 @@ func (erlang *erlangLang) updateRules(c *config.Config, f *rule.File, rules []*r
 	}
 }
 
-func ensureLoad(name, symbol string, index int, f *rule.File) {
+func ensureLoad(name, symbol string, f *rule.File) {
 	needsLoad := true
 	for _, load := range f.Loads {
 		if load.Name() == name {
@@ -286,7 +286,7 @@ func ensureLoad(name, symbol string, index int, f *rule.File) {
 	if needsLoad {
 		l := rule.NewLoad(name)
 		l.Add(symbol)
-		l.Insert(f, index)
+		l.Insert(f, 0)
 	}
 }
 
@@ -496,11 +496,11 @@ func (erlang *erlangLang) GenerateRules(args language.GenerateArgs) language.Gen
 		}
 
 		erlang.updateRules(args.Config, beamFilesMacro, beamFilesRules, appBzlFile)
-		ensureLoad("@rules_erlang//:erlang_bytecode2.bzl", "erlang_bytecode", 0, beamFilesMacro)
+		ensureLoad("@rules_erlang//:erlang_bytecode2.bzl", "erlang_bytecode", beamFilesMacro)
 		// NOTE: for some reason, LoadMacroFile ignores any "native.filegroup" rules
 		//       present in the macro. Therefore, we use our own "alias" of the
 		//       macro so that updates to the macro are stable
-		ensureLoad("@rules_erlang//:filegroup.bzl", "filegroup", 1, beamFilesMacro)
+		ensureLoad("@rules_erlang//:filegroup.bzl", "filegroup", beamFilesMacro)
 		beamFilesMacro.Save(appBzlFile)
 
 		beamFilesCall := rule.NewRule(allBeamFilesKind, allBeamFilesKind)

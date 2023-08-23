@@ -4,7 +4,7 @@ load(
     "path_join",
     "windows_path",
 )
-load(":util.bzl", "erl_libs_contents2")
+load(":util.bzl", "erl_libs_contents")
 load(
     "//tools:erlang_toolchain.bzl",
     "erlang_dirs",
@@ -49,6 +49,7 @@ def _impl(ctx):
     if ctx.attr.target != None:
         lib_info = ctx.attr.target[ErlangAppInfo]
         deps.extend(lib_info.deps)
+        deps.append(ctx.attr.target)
         for m in lib_info.beam:
             if m.extension == "beam":
                 module_name = m.basename.removesuffix(".beam")
@@ -61,9 +62,10 @@ def _impl(ctx):
 
     erl_libs_dir = ctx.label.name + "_deps"
 
-    erl_libs_files = erl_libs_contents2(
+    erl_libs_files = erl_libs_contents(
         ctx,
         deps = deps,
+        ez_deps = ctx.files.ez_deps,
         dir = erl_libs_dir,
     )
 
@@ -72,9 +74,6 @@ def _impl(ctx):
     erl_libs_path = path_join(package, erl_libs_dir)
 
     pa_args = []
-    if ctx.attr.target != None:
-        for dir in package_relative_dirnames(package, ctx.attr.target[ErlangAppInfo].beam):
-            pa_args.extend(["-pa", dir])
     for dir in package_relative_dirnames(package, ctx.files.compiled_suites):
         pa_args.extend(["-pa", dir])
 
@@ -187,6 +186,9 @@ eunit_test = rule(
         "eunit_opts": attr.string_list(),
         "data": attr.label_list(allow_files = True),
         "deps": attr.label_list(providers = [ErlangAppInfo]),
+        "ez_deps": attr.label_list(
+            allow_files = [".ez"],
+        ),
         "tools": attr.label_list(),
         "test_env": attr.string_dict(),
     },

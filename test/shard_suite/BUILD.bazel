@@ -30,8 +30,12 @@ load(
     "ct_suite",
 )
 load(
-    "@rules_erlang//:source_archive.bzl",
-    "source_archive",
+    "@rules_erlang//:source_tree.bzl",
+    "source_tree",
+)
+load(
+    "@rules_erlang//:ez.bzl",
+    "ez",
 )
 
 APP_NAME = "shard_suite"
@@ -84,6 +88,7 @@ plt(
     name = "base_plt",
     apps = DEFAULT_PLT_APPS + [
         "crypto",
+        "common_test",
     ],
 )
 
@@ -96,7 +101,16 @@ ct_suite(
     size = "small",
     additional_srcs = [
         "test/example_suite.erl",
+        "test/example_suite_missing_group.erl",
     ],
 )
 
-source_archive()
+source_tree(
+    name = "source_tree",
+    deps = [":erlang_app"],
+)
+
+ez(
+    name = "shard_suite",
+    app = ":erlang_app",
+)

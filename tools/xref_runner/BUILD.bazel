@@ -10,6 +10,7 @@ load(
 erlang_bytecode(
     name = "getopt_beam_files",
     srcs = ["@getopt_src//:srcs"],
+    dest = "ebin",
     erlc_opts = DEFAULT_ERLC_OPTS,
 )
 
@@ -30,6 +31,7 @@ erlang_app_info(
 erlang_bytecode(
     name = "xref_runner_beam_files",
     srcs = ["@xref_runner_src//:srcs"],
+    dest = "ebin",
     erlc_opts = DEFAULT_ERLC_OPTS,
 )
 

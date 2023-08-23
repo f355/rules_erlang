@@ -12,8 +12,8 @@ jobs:
       fail-fast: false
       matrix:
         otp:
-        - "24.3"
-        - "25.1"
+        - "25.3"
+        - "26.0"
     steps:
     - name: CHECKOUT
       uses: actions/checkout@v3
@@ -46,8 +46,8 @@ jobs:
       fail-fast: false
       matrix:
         otp:
-        - "24.3"
-        - "25.1"
+        - "25.3"
+        - "26.0"
     steps:
     - name: CHECKOUT
       uses: actions/checkout@v3
@@ -65,6 +65,7 @@ jobs:
           build --enable_runfiles
           build --color=yes
           build --@rules_erlang//:ct_test_windows_logdir_drive_letter=z
+          build --jobs=1
         EOF
     - name: TEST
       working-directory: test
@@ -97,8 +98,8 @@ jobs:
       fail-fast: false
       matrix:
         otp:
-        - "24.3"
-        - "25.1"
+        - "25.3"
+        - "26.0"
     steps:
     - name: CHECKOUT
       uses: actions/checkout@v3
@@ -128,7 +129,7 @@ jobs:
       fail-fast: false
       matrix:
         otp:
-        - "25.1"
+        - "25.3"
     steps:
     - name: CHECKOUT
       uses: actions/checkout@v3
@@ -146,6 +147,7 @@ jobs:
           build --enable_runfiles
           build --color=yes
           build --@rules_erlang//:ct_test_windows_logdir_drive_letter=z
+          build --jobs=1
         EOF
     - name: TEST
       working-directory: test
@@ -245,7 +247,7 @@ jobs:
     - name: CONFIGURE ERLANG
       uses: erlef/setup-beam@v1
       with:
-        otp-version: 25
+        otp-version: 26
     - name: TEST GAZELLE PACKAGE
       working-directory: test
       run: |
@@ -269,3 +271,17 @@ jobs:
       with:
         name: bazel-testlogs-gazelle
         path: ${{ steps.resolve-test-logs-path.outputs.LOGS_PATH }}/*
+  summary:
+    needs:
+    - test
+    - test-windows
+    - test-bzlmod
+    - test-bzlmod-windows
+    - test-bzlmod-internal-erlang
+    - test-host-erlang-change-detected
+    - test-gazelle-extension
+    runs-on: ubuntu-latest
+    steps:
+    - name: SUMMARY
+      run: |
+        echo "SUCCESS"

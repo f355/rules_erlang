@@ -1,8 +1,6 @@
 package erlang
 
 import (
-	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -16,6 +14,7 @@ type ErlangAppFileInfo struct {
 	Hdrs        mutable_set.MutableSet[string]
 	Beam        mutable_set.MutableSet[string]
 	Deps        mutable_set.MutableSet[string]
+	RuntimeBeam mutable_set.MutableSet[string]
 	RuntimeDeps mutable_set.MutableSet[string]
 }
 
@@ -24,6 +23,7 @@ func NewErlangAppFileInfo() ErlangAppFileInfo {
 		Hdrs:        mutable_set.New[string](),
 		Beam:        mutable_set.New[string](),
 		Deps:        mutable_set.New[string](),
+		RuntimeBeam: mutable_set.New[string](),
 		RuntimeDeps: mutable_set.New[string](),
 	}
 }
@@ -112,49 +112,6 @@ func multilineList[T any](values []T) build.Expr {
 	return &build.ListExpr{
 		List:           list,
 		ForceMultiLine: len(values) > 0,
-	}
-}
-
-func multilineGlob(glob rule.GlobValue, macro bool) build.Expr {
-	var patternsValue build.Expr
-	if len(glob.Patterns) < 2 {
-		patternsValue = rule.ExprFromValue(glob.Patterns)
-	} else {
-		patternsValue = multilineList(glob.Patterns)
-	}
-	globArgs := []build.Expr{patternsValue}
-	if len(glob.Excludes) > 0 {
-		excludesValue := multilineList(glob.Excludes)
-		globArgs = append(globArgs, &build.AssignExpr{
-			LHS: &build.LiteralExpr{Token: "exclude"},
-			Op:  "=",
-			RHS: excludesValue,
-		})
-	}
-	token := "glob"
-	if macro {
-		token = "native.glob"
-	}
-	return &build.CallExpr{
-		X:              &build.LiteralExpr{Token: token},
-		List:           globArgs,
-		ForceMultiLine: len(glob.Excludes) > 0,
-	}
-}
-
-func explicitPlusGlobExpr(
-	explicit []string,
-	glob rule.GlobValue,
-	macro bool,
-) build.Expr {
-	if len(explicit) == 0 {
-		return multilineGlob(glob, macro)
-	}
-
-	return &build.BinaryExpr{
-		X:  multilineList(explicit),
-		Op: "+",
-		Y:  multilineGlob(glob, macro),
 	}
 }
 
@@ -317,18 +274,7 @@ func (erlangApp *ErlangApp) BeamFilesRules(args language.GenerateArgs, erlParser
 			othersRule = rule.NewRule(erlangBytecodeKind, "other_beam")
 			othersRule.SetAttr("app_name", erlangApp.Name)
 			othersRule.SetAttr("erlc_opts", "//:"+erlcOptsRuleName)
-			othersSrcsGen := mutable_set.Map(others.Filter(func(v *ErlangAppFileParsed) bool {
-				return v.IsGenFile
-			}), (*ErlangAppFileParsed).path).Values(strings.Compare)
-			otherSrcsExcludes := mutable_set.Map(mutable_set.Union(transforms, behaviours), (*ErlangAppFileParsed).path).Values(strings.Compare)
-			othersRule.SetAttr("srcs", explicitPlusGlobExpr(
-				othersSrcsGen,
-				rule.GlobValue{
-					Patterns: []string{"src/**/*.erl"},
-					Excludes: otherSrcsExcludes,
-				},
-				erlangConfig.GenerateBeamFilesMacro,
-			))
+			othersRule.SetAttr("srcs", multilineList(others.Values(comparePaths)))
 			othersRule.SetAttr("hdrs", []string{":public_and_private_hdrs"})
 			othersRule.SetAttr("dest", "ebin")
 			if len(beamFilesGroupRules) > 0 {
@@ -480,18 +426,7 @@ func (erlangApp *ErlangApp) testBeamFilesRules(args language.GenerateArgs, erlPa
 			othersRule.SetAttr("testonly", true)
 			othersRule.SetAttr("app_name", erlangApp.Name)
 			othersRule.SetAttr("erlc_opts", "//:"+testErlcOptsRuleName)
-			othersSrcsGen := mutable_set.Map(others.Filter(func(v *ErlangAppFileParsed) bool {
-				return v.IsGenFile
-			}), (*ErlangAppFileParsed).path).Values(strings.Compare)
-			otherSrcsExcludes := mutable_set.Map(mutable_set.Union(transforms, behaviours), (*ErlangAppFileParsed).path).Values(strings.Compare)
-			othersRule.SetAttr("srcs", explicitPlusGlobExpr(
-				othersSrcsGen,
-				rule.GlobValue{
-					Patterns: []string{"src/**/*.erl"},
-					Excludes: otherSrcsExcludes,
-				},
-				erlangConfig.GenerateBeamFilesMacro,
-			))
+			othersRule.SetAttr("srcs", multilineList(others.Values(comparePaths)))
 			othersRule.SetAttr("hdrs", []string{":public_and_private_hdrs"})
 			othersRule.SetAttr("dest", "test")
 			if len(beamFilesGroupRules) > 0 {
@@ -555,28 +490,12 @@ func (erlangApp *ErlangApp) allSrcsRules(args language.GenerateArgs) (rules []*r
 	erlangConfig := erlangConfigForRel(args.Config, args.Rel)
 
 	srcs := rule.NewRule("filegroup", "srcs")
-	if erlangConfig.GenerateFewerBytecodeRules {
-		srcsGen := mutable_set.Map(erlangApp.Srcs.Filter(func(v *ErlangAppFileParsed) bool {
-			return v.IsGenFile
-		}), (*ErlangAppFileParsed).path).Values(strings.Compare)
-		srcs.SetAttr("srcs", explicitPlusGlobExpr(
-			srcsGen,
-			rule.GlobValue{
-				Patterns: []string{
-					"src/**/*.erl",
-					"src/**/*.app.src",
-				},
-			},
-			erlangConfig.GenerateBeamFilesMacro,
-		))
-	} else {
-		srcsSrcs := mutable_set.Union(
-			mutable_set.Map(erlangApp.Srcs, (*ErlangAppFileParsed).path),
-			mutable_set.Map(erlangApp.AppSrc, (*ErlangAppFile).path),
-		).Values(strings.Compare)
-		if len(srcsSrcs) > 0 {
-			srcs.SetAttr("srcs", multilineList(srcsSrcs))
-		}
+	srcsSrcs := mutable_set.Union(
+		mutable_set.Map(erlangApp.Srcs, (*ErlangAppFileParsed).path),
+		mutable_set.Map(erlangApp.AppSrc, (*ErlangAppFile).path),
+	).Values(strings.Compare)
+	if len(srcsSrcs) > 0 {
+		srcs.SetAttr("srcs", multilineList(srcsSrcs))
 	}
 	if erlangConfig.Testonly {
 		srcs.SetAttr("testonly", true)
@@ -584,22 +503,9 @@ func (erlangApp *ErlangApp) allSrcsRules(args language.GenerateArgs) (rules []*r
 	rules = append(rules, srcs)
 
 	private_hdrs := rule.NewRule("filegroup", "private_hdrs")
-	if erlangConfig.GenerateFewerBytecodeRules {
-		privateHdrsGen := mutable_set.Map(erlangApp.PrivateHdrs.Filter(func(v *ErlangAppFile) bool {
-			return v.IsGenFile
-		}), (*ErlangAppFile).path).Values(strings.Compare)
-		private_hdrs.SetAttr("srcs", explicitPlusGlobExpr(
-			privateHdrsGen,
-			rule.GlobValue{
-				Patterns: []string{"src/**/*.hrl"},
-			},
-			erlangConfig.GenerateBeamFilesMacro,
-		))
-	} else {
-		if !erlangApp.PrivateHdrs.IsEmpty() {
-			private_hdrs.SetAttr("srcs", multilineList(
-				erlangApp.PrivateHdrs.Values(comparePaths2)))
-		}
+	if !erlangApp.PrivateHdrs.IsEmpty() {
+		private_hdrs.SetAttr("srcs", multilineList(
+			erlangApp.PrivateHdrs.Values(comparePaths2)))
 	}
 	if erlangConfig.Testonly {
 		private_hdrs.SetAttr("testonly", true)
@@ -607,23 +513,9 @@ func (erlangApp *ErlangApp) allSrcsRules(args language.GenerateArgs) (rules []*r
 	rules = append(rules, private_hdrs)
 
 	public_hdrs := rule.NewRule("filegroup", "public_hdrs")
-	if erlangConfig.GenerateFewerBytecodeRules {
-		publicHdrsGen := mutable_set.Map(erlangApp.PublicHdrs.Filter(func(v *ErlangAppFile) bool {
-			return v.IsGenFile
-		}), (*ErlangAppFile).path).Values(strings.Compare)
-		public_hdrs.SetAttr("srcs", explicitPlusGlobExpr(
-			publicHdrsGen,
-			rule.GlobValue{
-				Patterns: []string{"include/**/*.hrl"},
-			},
-			erlangConfig.GenerateBeamFilesMacro,
-		))
-	} else {
-		if !erlangApp.PublicHdrs.IsEmpty() {
-			public_hdrs.SetAttr("srcs", multilineList(
-				erlangApp.PublicHdrs.Values(comparePaths2)))
-		}
-
+	if !erlangApp.PublicHdrs.IsEmpty() {
+		public_hdrs.SetAttr("srcs", multilineList(
+			erlangApp.PublicHdrs.Values(comparePaths2)))
 	}
 	if erlangConfig.Testonly {
 		public_hdrs.SetAttr("testonly", true)
@@ -631,22 +523,9 @@ func (erlangApp *ErlangApp) allSrcsRules(args language.GenerateArgs) (rules []*r
 	rules = append(rules, public_hdrs)
 
 	priv := rule.NewRule("filegroup", "priv")
-	if erlangConfig.GenerateFewerBytecodeRules {
-		privGen := mutable_set.Map(erlangApp.Priv.Filter(func(v *ErlangAppFile) bool {
-			return v.IsGenFile
-		}), (*ErlangAppFile).path).Values(strings.Compare)
-		priv.SetAttr("srcs", explicitPlusGlobExpr(
-			privGen,
-			rule.GlobValue{
-				Patterns: []string{"priv/**/*"},
-			},
-			erlangConfig.GenerateBeamFilesMacro,
-		))
-	} else {
-		if !erlangApp.Priv.IsEmpty() {
-			priv.SetAttr("srcs", multilineList(
-				erlangApp.Priv.Values(comparePaths2)))
-		}
+	if !erlangApp.Priv.IsEmpty() {
+		priv.SetAttr("srcs", multilineList(
+			erlangApp.Priv.Values(comparePaths2)))
 	}
 	if erlangConfig.Testonly {
 		priv.SetAttr("testonly", true)
@@ -654,22 +533,9 @@ func (erlangApp *ErlangApp) allSrcsRules(args language.GenerateArgs) (rules []*r
 	rules = append(rules, priv)
 
 	licenses := rule.NewRule("filegroup", "license_files")
-	if erlangConfig.GenerateFewerBytecodeRules {
-		licensesGen := mutable_set.Map(erlangApp.LicenseFiles.Filter(func(v *ErlangAppFile) bool {
-			return v.IsGenFile
-		}), (*ErlangAppFile).path).Values(strings.Compare)
-		licenses.SetAttr("srcs", explicitPlusGlobExpr(
-			licensesGen,
-			rule.GlobValue{
-				Patterns: []string{"LICENSE*"},
-			},
-			erlangConfig.GenerateBeamFilesMacro,
-		))
-	} else {
-		if !erlangApp.LicenseFiles.IsEmpty() {
-			licenses.SetAttr("srcs", multilineList(
-				erlangApp.LicenseFiles.Values(comparePaths2)))
-		}
+	if !erlangApp.LicenseFiles.IsEmpty() {
+		licenses.SetAttr("srcs", multilineList(
+			erlangApp.LicenseFiles.Values(comparePaths2)))
 	}
 	if erlangConfig.Testonly {
 		licenses.SetAttr("testonly", true)
@@ -808,128 +674,30 @@ func (erlangApp *ErlangApp) testPathFor(from, include string) string {
 }
 
 func (erlangApp *ErlangApp) TestDirBeamFilesRules(args language.GenerateArgs, erlParser ErlParser) []*rule.Rule {
-	erlangConfig := erlangConfigForRel(args.Config, args.Rel)
-
-	ownModules := mutable_set.New[string]()
-	for _, src := range erlangApp.Srcs.Values(comparePaths) {
-		ownModules.Add(src.moduleName())
-	}
-
-	moduleindex, err := ReadModuleindex(filepath.Join(args.Config.RepoRoot, "moduleindex.yaml"))
-	if err != nil {
-		Log(args.Config, fmt.Sprintf("ERROR: %v\n", err))
-	}
-
 	var beamFilesRules []*rule.Rule
 	outs := mutable_set.New[string]()
 	for _, src := range erlangApp.TestSrcs.Values(comparePaths) {
-		erlAttrs := src.ErlAttrs
-
-		Log(args.Config, "        Analyzing", src.path())
-
-		theseHdrs := mutable_set.New[string]()
-		for _, include := range erlAttrs.Include {
-			path := erlangApp.testPathFor(src.Path, include)
-			if path != "" {
-				Log(args.Config, "            include", path)
-				theseHdrs.Add(path)
-			} else if !ignoredIncludeLoggingPattern.MatchString(include) {
-				Log(args.Config, "            ignoring include",
-					include, "as it cannot be found")
-			}
-		}
-
-		theseDeps := mutable_set.New[string]()
-		for _, include := range erlAttrs.IncludeLib {
-			path := erlangApp.pathFor(src.Path, include)
-			if path != "" {
-				Log(args.Config, "            include_lib", path)
-				theseHdrs.Add(path)
-			} else if parts := strings.Split(include, string(os.PathSeparator)); len(parts) > 0 {
-				if !erlangConfig.IgnoredDeps.Contains(parts[0]) {
-					Log(args.Config, "            include_lib", include, "->", parts[0])
-					theseDeps.Add(parts[0])
-				} else {
-					Log(args.Config, "            ignoring include_lib", include)
-				}
-			}
-		}
-
-		theseBeam := mutable_set.New[string]()
-		for _, module := range erlAttrs.modules() {
-			found := false
-			for _, other_src := range erlangApp.Srcs.Values(comparePaths) {
-				if other_src.moduleName() == module {
-					Log(args.Config, "            module", module, "->", beamFile(src.Path))
-					theseBeam.Add(beamFile(other_src.Path))
-					found = true
-					break
-				}
-			}
-			if found {
-				continue
-			}
-			if dep, found := erlangConfig.ModuleMappings[module]; found {
-				Log(args.Config, "            module", module, "->", dep)
-				theseDeps.Add(dep)
-				continue
-			}
-			if app := FindModule(moduleindex, module); app != "" && app != erlangApp.Name {
-				Log(args.Config, "            module", module, "->", app)
-				theseDeps.Add(app)
-				continue
-			}
-		}
-
-		theseRuntimeBeam := mutable_set.New[string]()
-		theseRuntimeDeps := mutable_set.New[string]()
-		for module := range erlAttrs.Call {
-			found := false
-			for _, other_src := range erlangApp.TestSrcs.Values(comparePaths) {
-				if moduleName(other_src.Path) == module {
-					Log(args.Config, "            module", module, "->", beamFile(src.Path))
-					theseRuntimeBeam.Add(strings.TrimSuffix(other_src.Path, ".erl") + ".beam")
-					found = true
-					break
-				}
-			}
-			if found {
-				continue
-			}
-			app := erlangConfig.ModuleMappings[module]
-			if app == "" {
-				app = FindModule(moduleindex, module)
-			}
-			if app == "" {
-				Log(args.Config, "            ignoring call", module)
-			} else if app == erlangApp.Name {
-				Log(args.Config, "            self call", module, "->", app)
-			} else if erlangConfig.IgnoredDeps.Contains(app) {
-				Log(args.Config, "            ignoring call", module, "->", app, "(explicit ignore)")
-			} else {
-				Log(args.Config, "            call", module, "->", app)
-				theseRuntimeDeps.Add(app)
-			}
-		}
+		deps := src.TestInfo
 
 		out := strings.TrimSuffix(src.Path, ".erl") + ".beam"
 		outs.Add(out)
 
 		erlang_bytecode := rule.NewRule(erlangBytecodeKind, ruleNameForTestSrc(out))
+		erlang_bytecode.SetAttr("app_name", erlangApp.Name)
 		erlang_bytecode.SetAttr("srcs", []interface{}{src})
-		if !theseHdrs.IsEmpty() {
-			erlang_bytecode.SetAttr("hdrs", theseHdrs.Values(strings.Compare))
+		if !deps.Hdrs.IsEmpty() {
+			erlang_bytecode.SetAttr("hdrs", deps.Hdrs.Values(strings.Compare))
 		}
 		erlang_bytecode.SetAttr("erlc_opts", "//:"+testErlcOptsRuleName)
 		erlang_bytecode.SetAttr("outs", []string{out})
-		if !theseBeam.IsEmpty() {
-			erlang_bytecode.SetAttr("beam", theseBeam.Values(strings.Compare))
+		if !deps.Beam.IsEmpty() {
+			erlang_bytecode.SetAttr("beam", deps.Beam.Values(strings.Compare))
 		}
-		if !theseDeps.IsEmpty() {
-			erlang_bytecode.SetAttr("deps", theseDeps.Values(strings.Compare))
+		if !deps.Deps.IsEmpty() {
+			erlang_bytecode.SetAttr("deps", deps.Deps.Values(strings.Compare))
 		}
-		erlang_bytecode.SetPrivateAttr("runtime_beam", theseRuntimeBeam.Values(strings.Compare))
-		erlang_bytecode.SetPrivateAttr("runtime_deps", theseRuntimeDeps.Values(strings.Compare))
+		erlang_bytecode.SetPrivateAttr("runtime_beam", deps.RuntimeBeam.Values(strings.Compare))
+		erlang_bytecode.SetPrivateAttr("runtime_deps", deps.RuntimeDeps.Values(strings.Compare))
 		erlang_bytecode.SetAttr("testonly", true)
 
 		beamFilesRules = append(beamFilesRules, erlang_bytecode)

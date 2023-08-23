@@ -43,6 +43,7 @@ def _erlang_build_impl(ctx):
     version_file = ctx.actions.declare_file(ctx.label.name + "_version")
 
     extra_configure_opts = " ".join(ctx.attr.extra_configure_opts)
+    pre_configure_cmds = "\n".join(ctx.attr.pre_configure_cmds)
     post_configure_cmds = "\n".join(ctx.attr.post_configure_cmds)
     extra_make_opts = " ".join(ctx.attr.extra_make_opts)
 
@@ -92,7 +93,6 @@ fi
             build_log,
             release_dir_tar,
         ],
-        # tools = [zipper],
         command = """set -euo pipefail
 
 ABS_BUILD_DIR_TAR=$PWD/{build_path}
@@ -102,7 +102,6 @@ ABS_LOG=$PWD/{build_log}
 ABS_BUILD_DIR="$(mktemp -d)"
 ABS_DEST_DIR="$(mktemp -d)"
 
-# {zipper} x {archive_path} -d "$ABS_BUILD_DIR"
 tar --extract \\
     --transform 's/{strip_prefix}//' \\
     --file "{archive_path}" \\
@@ -111,10 +110,17 @@ tar --extract \\
 echo "Building OTP $(cat $ABS_BUILD_DIR/OTP_VERSION) in $ABS_BUILD_DIR"
 
 cd "$ABS_BUILD_DIR"
-./configure --prefix={install_path} {extra_configure_opts} >> "$ABS_LOG" 2>&1
+{pre_configure_cmds}
+./configure --prefix={install_path} {extra_configure_opts} >> "$ABS_LOG" 2>&1 \\
+    || (cat "$ABS_LOG" && exit 1)
 {post_configure_cmds}
-make {extra_make_opts} >> "$ABS_LOG" 2>&1
-make DESTDIR="$ABS_DEST_DIR" install >> "$ABS_LOG" 2>&1
+echo "\tconfigure finished"
+make {extra_make_opts} >> "$ABS_LOG" 2>&1 \\
+    || (cat "$ABS_LOG" && exit 1)
+echo "\tmake finished"
+make DESTDIR="$ABS_DEST_DIR" install >> "$ABS_LOG" 2>&1 \\
+    || (cat "$ABS_LOG" && exit 1)
+echo "\tmake install finished"
 
 tar --create \\
     --file $ABS_BUILD_DIR_TAR \\
@@ -127,13 +133,13 @@ tar --create \\
 """.format(
             archive_path = downloaded_archive.path,
             strip_prefix = strip_prefix,
-            zipper = "",  # zipper.path,
             build_path = build_dir_tar.path,
             release_path = release_dir_tar.path,
             install_path = install_path,
             install_root = install_root,
             build_log = build_log.path,
             extra_configure_opts = extra_configure_opts,
+            pre_configure_cmds = pre_configure_cmds,
             post_configure_cmds = post_configure_cmds,
             extra_make_opts = extra_make_opts,
         ),
@@ -190,18 +196,14 @@ echo "$V" >> {version_file}
 erlang_build = rule(
     implementation = _erlang_build_impl,
     attrs = {
-        # "_zipper": attr.label(
-        #     default = Label("@bazel_tools//tools/zip:zipper"),
-        #     executable = True,
-        #     cfg = "exec",
-        # ),
         "version": attr.string(mandatory = True),
         "url": attr.string(mandatory = True),
         "strip_prefix": attr.string(),
         "sha256": attr.string(),
         "install_prefix": attr.string(default = DEFAULT_INSTALL_PREFIX),
+        "pre_configure_cmds": attr.string_list(),
         "extra_configure_opts": attr.string_list(),
-        "post_configure_cmds": attr.string_list(),  # <- hopefully don't need this
+        "post_configure_cmds": attr.string_list(),
         "extra_make_opts": attr.string_list(
             default = ["-j 8"],
         ),
