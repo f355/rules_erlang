@@ -69,7 +69,6 @@ erlang_release = rule(
             allow_single_file = ["rebar.config"],
         ),
         "release": attr.string(),
-        "lib_dir": attr.string(),
         "deps": attr.label_list(providers = [ErlangAppInfo]),
         "out": attr.string(),
     },
