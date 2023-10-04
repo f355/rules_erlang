@@ -35,10 +35,11 @@ export OUTDIR="{out_dir}"
 set -x
 "{erlang_home}"/bin/erl \\
     -noshell \\
-    -eval "starlet:release_tar()" \\
+    -eval "{release_fun}" \\
     -s erlang halt
     """.format(
         erl_libs_path = erl_libs_path,
+        release_fun = ctx.attr.release_fun,
         out_dir = out_dir,
         maybe_install_erlang = maybe_install_erlang(ctx),
         erlang_home = erlang_home,
@@ -57,7 +58,7 @@ set -x
 erlang_release = rule(
     implementation = _impl,
     attrs = {
-        "release": attr.string(),
+        "release_fun": attr.string(),
         "deps": attr.label_list(providers = [ErlangAppInfo]),
         "out": attr.string(),
     },
