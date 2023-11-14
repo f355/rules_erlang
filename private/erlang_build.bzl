@@ -111,10 +111,17 @@ ABS_LOG=$PWD/{build_log}
 ABS_BUILD_DIR="$(mktemp -d)"
 ABS_DEST_DIR="$(mktemp -d)"
 
-tar --extract \\
-    --transform 's/{strip_prefix}//' \\
-    --file "{archive_path}" \\
-    --directory "$ABS_BUILD_DIR"
+if [ "$(uname)" == "Darwin" ]; then
+    tar --extract \\
+        -s '/{strip_prefix}//' \\
+        --file "{archive_path}" \\
+        --directory "$ABS_BUILD_DIR"
+else
+    tar --extract \\
+        --transform 's/{strip_prefix}//' \\
+        --file "{archive_path}" \\
+        --directory "$ABS_BUILD_DIR"
+fi
 
 echo "Building OTP $(cat $ABS_BUILD_DIR/OTP_VERSION) in $ABS_BUILD_DIR"
 
