@@ -112,12 +112,8 @@ ABS_BUILD_DIR="$(mktemp -d)"
 ABS_DEST_DIR="$(mktemp -d)"
 
 if [ "$(uname)" == "Darwin" ]; then
-    echo tar --extract \\
-        -s "/{strip_prefix}//" \\
-        --file "{archive_path}" \\
-        --directory "$ABS_BUILD_DIR"
     tar --extract \\
-        -s "/{strip_prefix}//" \\
+        -s "#{strip_prefix}##" \\
         --file "{archive_path}" \\
         --directory "$ABS_BUILD_DIR"
 else
