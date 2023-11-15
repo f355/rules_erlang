@@ -31,7 +31,7 @@ external erlang is used""",
     },
 )
 
-DEFAULT_INSTALL_PREFIX = "/tmp/bazel/erlang"
+DEFAULT_INSTALL_PREFIX = "$(mktemp -d)"
 
 def _install_root(install_prefix):
     (root_dir, _, _) = install_prefix.removeprefix("/").partition("/")
