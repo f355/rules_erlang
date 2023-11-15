@@ -116,7 +116,7 @@ echo "Building OTP $(cat $ABS_BUILD_DIR/OTP_VERSION) in $ABS_BUILD_DIR"
 
 cd "$ABS_BUILD_DIR"
 {pre_configure_cmds}
-./configure --prefix={install_path} {extra_configure_opts} >> "$ABS_LOG" 2>&1 \\
+./configure --prefix=$PWD/{install_path} {extra_configure_opts} >> "$ABS_LOG" 2>&1 \\
     || (cat "$ABS_LOG" && exit 1)
 {post_configure_cmds}
 echo "\tconfigure finished"
@@ -142,7 +142,7 @@ tar --create \\
             strip_prefix = strip_prefix,
             build_path = build_dir_tar.path,
             release_path = release_dir_tar.path,
-            install_path = install_path.path,
+            install_path = install_path.short_path,
             build_log = build_log.path,
             extra_configure_opts = extra_configure_opts,
             pre_configure_cmds = pre_configure_cmds,
@@ -150,10 +150,10 @@ tar --create \\
             extra_make_opts = extra_make_opts,
         ),
         mnemonic = "OTP",
-        progress_message = "Compiling otp from source",
+        progress_message = "Compiling OTP from source",
     )
 
-    erlang_home = path_join(install_path, "lib", "erlang")
+    erlang_home = path_join(install_path.path, "lib", "erlang")
 
     ctx.actions.run_shell(
         inputs = [release_dir_tar],
@@ -181,7 +181,7 @@ echo "$V" >> {version_file}
             version_file = version_file.path,
         ),
         mnemonic = "OTP",
-        progress_message = "Validating otp at {}".format(erlang_home),
+        progress_message = "Validating OTP at {}".format(erlang_home),
     )
 
     return [
