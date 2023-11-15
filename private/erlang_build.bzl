@@ -31,12 +31,6 @@ external erlang is used""",
     },
 )
 
-DEFAULT_INSTALL_PREFIX = "$(mktemp -d)"
-
-def _install_root(install_prefix):
-    (root_dir, _, _) = install_prefix.removeprefix("/").partition("/")
-    return "/" + root_dir
-
 def _erlang_build_impl(ctx):
     (_, _, filename) = ctx.attr.url.rpartition("/")
     downloaded_archive = ctx.actions.declare_file(filename)
@@ -44,6 +38,7 @@ def _erlang_build_impl(ctx):
     build_dir_tar = ctx.actions.declare_file(ctx.label.name + "_build.tar")
     build_log = ctx.actions.declare_file(ctx.label.name + "_build.log")
     release_dir_tar = ctx.actions.declare_file(ctx.label.name + "_release.tar")
+    install_path = ctx.actions.declare_directory(ctx.label.name + "_install")
 
     version_file = ctx.actions.declare_file(ctx.label.name + "_version")
 
@@ -51,13 +46,6 @@ def _erlang_build_impl(ctx):
     pre_configure_cmds = "\n".join(ctx.attr.pre_configure_cmds)
     post_configure_cmds = "\n".join(ctx.attr.post_configure_cmds)
     extra_make_opts = " ".join(ctx.attr.extra_make_opts)
-
-    if not ctx.attr.install_prefix.startswith("/"):
-        # otp installations are not relocatable, so the install_prefix
-        # must be absolute to build a predictable location
-        fail("install_prefix must be absolute")
-    install_path = path_join(ctx.attr.install_prefix, ctx.label.name)
-    install_root = _install_root(ctx.attr.install_prefix)
 
     # At one point this rule recevied the erlang sources as a
     # label_list attribute, which had been fetched with a repository
@@ -94,6 +82,7 @@ curl -L "{archive_url}" -o {archive_path}
             build_dir_tar,
             build_log,
             release_dir_tar,
+            install_path,
         ],
         command = """set -euo pipefail
 
@@ -153,8 +142,7 @@ tar --create \\
             strip_prefix = strip_prefix,
             build_path = build_dir_tar.path,
             release_path = release_dir_tar.path,
-            install_path = install_path,
-            install_root = install_root,
+            install_path = install_path.path,
             build_log = build_log.path,
             extra_configure_opts = extra_configure_opts,
             pre_configure_cmds = pre_configure_cmds,
@@ -218,7 +206,6 @@ erlang_build = rule(
         "url": attr.string(mandatory = True),
         "strip_prefix": attr.string(),
         "sha256v": attr.string(),
-        "install_prefix": attr.string(default = DEFAULT_INSTALL_PREFIX),
         "pre_configure_cmds": attr.string_list(),
         "extra_configure_opts": attr.string_list(),
         "post_configure_cmds": attr.string_list(),
