@@ -85,7 +85,7 @@ for F in {out_files} ; do
             mv "$SRC.tmp" "$SRC"
             ;;
     esac
-    mv -v "$SRC" "$F"
+    mv "$SRC" "$F"
 done
     """.format(
         maybe_install_erlang = maybe_install_erlang(ctx),

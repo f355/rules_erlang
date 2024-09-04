@@ -54,7 +54,7 @@ CODEC_OPTS='{codec_opts}'
 
 for F in {out_files} ; do
     SRC="$TMP/${{F##*/}}"
-    mv -v "$SRC" "$F"
+    mv "$SRC" "$F"
 done
     """.format(
         maybe_install_erlang = maybe_install_erlang(ctx),
