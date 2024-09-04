@@ -49,7 +49,7 @@ mkdir -p {out_dirs}
 
 "{erlang_home}"/bin/erlc \\
     +noobj \\
-    -v {include_args} \\
+    {include_args} \\
     -o "$TMP" \\
     $@
 
