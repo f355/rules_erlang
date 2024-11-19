@@ -45,13 +45,18 @@ set -x
         erlang_home = erlang_home,
     )
 
+
+    inputs = depset(
+        direct = erl_libs_files,
+        transitive = [runfiles.files],
+    )
+
     ctx.actions.run_shell(
         command = script,
-        inputs = erl_libs_files,
+        inputs = inputs,
         outputs = [output],
         mnemonic = "ERLRELEASE",
     )
-
 
     return [DefaultInfo(files = depset([output]))]
 
